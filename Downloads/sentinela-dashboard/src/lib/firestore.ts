@@ -108,10 +108,12 @@ export function calcKpis(avaliacoes: Avaliacao[]): KpiData {
   const media = soma / total;
   const nota100 = avaliacoes.filter((a) => a.nota >= 100).length;
   const ncs = avaliacoes.filter((a) =>
+    a.nota < 100 &&
     (a.categoria || "").toUpperCase().includes("NC") &&
     !(a.categoria || "").toUpperCase().includes("NCG")
   ).length;
   const ncgs = avaliacoes.filter((a) =>
+    a.nota < 100 &&
     (a.categoria || "").toUpperCase().includes("NCG")
   ).length;
   return { total, media, nota100, ncs, ncgs, pctMeta: (nota100 / total) * 100 };
