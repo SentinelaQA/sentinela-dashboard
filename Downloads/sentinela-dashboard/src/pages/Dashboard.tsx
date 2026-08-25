@@ -6,7 +6,7 @@ import {
   getCausaRaiz, getMeses, statusBadge, mediaColor,
   type Avaliacao,
 } from "../lib/firestore";
-import { normCaixa, getProcesso, PROCESSOS_CAIXAS, PROCESSO_LIST, abrevCaixa } from "../lib/processos";
+import { normCaixa, abrevCaixa } from "../lib/processos";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, Cell, ComposedChart, Line, LabelList,
@@ -14,10 +14,33 @@ import {
 
 const MESES_ORDEM = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const CORES_MES = ["#1B2A4A","#00A4E0","#9CA3AF","#00D664","#F59E0B"];
+
+// ── Processos e caixas ──────────────────────────────────────────
+const AGENDA_FINANCEIRA_CAIXAS = [
+  "Gestão Aluguel Estornos",
+  "Gestão Aluguel Incentivos",
+  "Regularizações Financeiras",
+  "Saldo de Auditoria",
+  "Evento 9066",
+  "Evento 7922",
+  "Evento 5125",
+  "Processos Ouvidoria BO",
+  "BackOffice Mídias Sociais",
+  "Consultoria",
+  "Prévia MDR",
+  "Estorno MDR",
+  "Atendimento BackOffice",
+  "Desfazimento",
+  "STD Aéreo",
+  "STD Corporate",
+];
+
+const SUPORTE_CAIXAS = ["Suporte Conciliação"];
+
 const fmt = (n: number, d = 2) => isNaN(n) ? "—" : n.toFixed(d).replace(".", ",");
 const pct = (n: number) => `${Math.round(n)}%`;
 
-// ── Helpers de KPI visual ────────────────────────────────────────
+// ── Componentes visuais ─────────────────────────────────────────
 function KpiCard({ label, val, sub, color = "#e2e8f0" }: { label: string; val: string; sub?: string; color?: string }) {
   return (
     <div className="card p-5 text-center card-hover">
@@ -38,8 +61,7 @@ function KpiPill({ label, val, vol, color }: { label: string; val: string; vol: 
   );
 }
 
-// ── Gráfico padrão: Volume (barra) + Nota (linha pontilhada) ────
-function ChartVolNota({ data, labelKey }: { data: { label: string; volume: number; nota: number }[]; labelKey?: string }) {
+function ChartVolNota({ data }: { data: { label: string; volume: number; nota: number }[] }) {
   return (
     <ResponsiveContainer width="100%" height={240}>
       <ComposedChart data={data} margin={{ top: 22, right: 10, left: -10, bottom: 5 }}>
@@ -62,7 +84,6 @@ function ChartVolNota({ data, labelKey }: { data: { label: string; volume: numbe
   );
 }
 
-// ── Gráfico barras agrupadas por mês ────────────────────────────
 function ChartMeses({ data, meses, labelKey }: { data: any[]; meses: string[]; labelKey: string }) {
   return (
     <ResponsiveContainer width="100%" height={240}>
@@ -84,7 +105,6 @@ function ChartMeses({ data, meses, labelKey }: { data: any[]; meses: string[]; l
   );
 }
 
-// ── Tab bar ─────────────────────────────────────────────────────
 function TabBar({ tabs, active, onChange }: { tabs: string[]; active: string; onChange: (t: string) => void }) {
   return (
     <div className="flex border-b border-navy-600 px-1 overflow-x-auto">
@@ -99,60 +119,79 @@ function TabBar({ tabs, active, onChange }: { tabs: string[]; active: string; on
 }
 
 // ════════════════════════════════════════════════════════════════
-//  MAIN DASHBOARD
-// ════════════════════════════════════════════════════════════════
 export default function Dashboard() {
   const [avaliacoes, setAvaliacoes] = useState<Avaliacao[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [processo, setProcesso] = useState("Agenda Financeira");
+  const [processo, setProcesso] = useState<"Agenda Financeira" | "Suporte Conciliação">("Agenda Financeira");
   const [tab, setTab] = useState("Consolidado");
   const [filtroMes, setFiltroMes] = useState("Todos");
-  const [filtroCaixa, setFiltroCaixa] = useState("Todas");
   const [filtroAnalista, setFiltroAnalista] = useState("Todos");
+
+  // Caixas selecionadas via checkbox (Agenda Financeira)
+  const [caixasSel, setCaixasSel] = useState<Set<string>>(new Set(AGENDA_FINANCEIRA_CAIXAS));
 
   useEffect(() => {
     fetchAvaliacoes()
-      .then((d) => setAvaliacoes(d.map((a) => ({ ...a, caixa: normCaixa(a.caixa), processo: getProcesso(a.caixa) }))))
+      .then((d) => setAvaliacoes(d.map((a) => ({ ...a, caixa: normCaixa(a.caixa) }))))
       .catch(() => setError("Erro ao carregar dados."))
       .finally(() => setLoading(false));
   }, []);
 
-  // ── Dados filtrados por processo ──────────────────────────────
+  // Caixas do processo atual
+  const caixasProcesso = processo === "Agenda Financeira" ? AGENDA_FINANCEIRA_CAIXAS : SUPORTE_CAIXAS;
+
+  // Toggle checkbox
+  function toggleCaixa(cx: string) {
+    setCaixasSel((prev) => {
+      const next = new Set(prev);
+      next.has(cx) ? next.delete(cx) : next.add(cx);
+      return next;
+    });
+  }
+  function toggleTodas() {
+    if (caixasSel.size === caixasProcesso.length) setCaixasSel(new Set());
+    else setCaixasSel(new Set(caixasProcesso));
+  }
+
+  // Caixas ativas (interseção selecionadas × existentes no Firebase)
+  const caixasAtivas = useMemo(() =>
+    processo === "Agenda Financeira"
+      ? caixasProcesso.filter((cx) => caixasSel.has(cx))
+      : caixasProcesso,
+    [processo, caixasSel, caixasProcesso]);
+
+  // Dados do processo filtrado
   const procData = useMemo(() =>
-    avaliacoes.filter((a) => (a as any).processo === processo), [avaliacoes, processo]);
+    avaliacoes.filter((a) => caixasProcesso.includes(a.caixa)),
+    [avaliacoes, caixasProcesso]);
 
   const meses = useMemo(() => getMeses(procData), [procData]);
-  const caixasProc = useMemo(() =>
-    [...new Set(procData.map((a) => a.caixa))].filter(Boolean).sort(), [procData]);
   const analistasProc = useMemo(() =>
     [...new Set(procData.map((a) => a.analista))].filter(Boolean).sort(), [procData]);
 
+  // Dados filtrados por caixas selecionadas + mês + analista
   const filtered = useMemo(() => procData.filter((a) => {
+    if (!caixasAtivas.includes(a.caixa)) return false;
     if (filtroMes !== "Todos" && a.mes !== filtroMes) return false;
-    if (filtroCaixa !== "Todas" && a.caixa !== filtroCaixa) return false;
     if (filtroAnalista !== "Todos" && a.analista !== filtroAnalista) return false;
     return true;
-  }), [procData, filtroMes, filtroCaixa, filtroAnalista]);
+  }), [procData, caixasAtivas, filtroMes, filtroAnalista]);
 
-  // ── Agregações ────────────────────────────────────────────────
   const kpis = useMemo(() => calcKpisDetalhado(filtered), [filtered]);
   const mesDados = useMemo(() => byMes(filtered), [filtered]);
   const cicloDados = useMemo(() => byCiclo(filtered), [filtered]);
   const analistaDados = useMemo(() => byAnalista(filtered), [filtered]);
   const causaRaiz = useMemo(() => getCausaRaiz(filtered), [filtered]);
 
-  // Últimos 3 meses disponíveis
   const mesesRecentes = useMemo(() => meses.slice(-3), [meses]);
 
-  // Qualidade Trimestral – dados para ChartVolNota
   const trimData = useMemo(() =>
     mesDados.slice(-3).map((m) => ({ label: m.mes, volume: m.volume, nota: m.media })),
     [mesDados]);
 
-  // Qualidade por Célula (meses × caixa)
   const celData = useMemo(() => {
-    return caixasProc.map((cx) => {
+    return caixasAtivas.map((cx) => {
       const row: Record<string, any> = { caixa: abrevCaixa(cx) };
       mesesRecentes.forEach((m) => {
         const av = filtered.filter((a) => a.caixa === cx && a.mes === m);
@@ -160,9 +199,8 @@ export default function Dashboard() {
       });
       return row;
     });
-  }, [filtered, caixasProc, mesesRecentes]);
+  }, [filtered, caixasAtivas, mesesRecentes]);
 
-  // Caixas avaliadas – volume + nota por caixa (mês filtrado)
   const caixasAval = useMemo(() => {
     const cx: Record<string, { vol: number; sum: number }> = {};
     filtered.forEach((a) => {
@@ -177,14 +215,8 @@ export default function Dashboard() {
     })).sort((a, b) => b.volume - a.volume);
   }, [filtered]);
 
-  // Ofensores (últimos 3 meses, por caixa)
-  const mesesCores: Record<string, string> = {};
-  mesesRecentes.forEach((m, i) => { mesesCores[m] = CORES_MES[i]; });
-
-  // Para gráfico de ofensores por mês agrupado
-  const assuntosUniq = useMemo(() => [...new Set(filtered.map((a) => a.caixa))].sort(), [filtered]);
   const ofensorData = useMemo(() => {
-    return assuntosUniq.map((cx) => {
+    return caixasAtivas.map((cx) => {
       const row: Record<string, any> = { label: abrevCaixa(cx) };
       mesesRecentes.forEach((m) => {
         const av = filtered.filter((a) => a.caixa === cx && a.mes === m);
@@ -192,17 +224,11 @@ export default function Dashboard() {
       });
       return row;
     });
-  }, [filtered, assuntosUniq, mesesRecentes]);
+  }, [filtered, caixasAtivas, mesesRecentes]);
 
-  // Analistas 100%
-  const an100 = useMemo(() =>
-    analistaDados.filter((a) => a.media >= 100), [analistaDados]);
+  const an100 = useMemo(() => analistaDados.filter((a) => a.media >= 100), [analistaDados]);
+  const anAbaixo = useMemo(() => analistaDados.filter((a) => a.media < 100).sort((a, b) => a.media - b.media), [analistaDados]);
 
-  // Analistas abaixo da meta
-  const anAbaixo = useMemo(() =>
-    analistaDados.filter((a) => a.media < 100).sort((a, b) => a.media - b.media), [analistaDados]);
-
-  // Quadro de acompanhamento – ativos por ciclo
   const quadroCiclo = useMemo(() => {
     const res: Record<number, Set<string>> = { 1: new Set(), 2: new Set(), 3: new Set(), 4: new Set() };
     filtered.forEach((a) => { if (a.ciclo >= 1 && a.ciclo <= 4) res[a.ciclo].add(a.analista); });
@@ -210,7 +236,6 @@ export default function Dashboard() {
   }, [filtered]);
 
   const TABS = ["Consolidado", "Acompanhamento", "Indicadores", "Ofensores", "Analistas 100%"];
-
   const periodoLabel = filtroMes !== "Todos" ? filtroMes
     : meses.length ? `${meses[0]} – ${meses[meses.length - 1]}` : "–";
 
@@ -225,16 +250,14 @@ export default function Dashboard() {
       <div className="card p-8 text-center max-w-sm">
         <p className="text-4xl mb-3">⚠️</p>
         <p className="text-red-400 font-semibold">{error}</p>
-        <button onClick={() => window.location.reload()}
-          className="mt-4 px-4 py-2 rounded-lg text-sm font-semibold text-white"
-          style={{ background: "#00A4E0" }}>Tentar novamente</button>
+        <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: "#00A4E0" }}>Tentar novamente</button>
       </div>
     </div>
   );
 
   return (
     <div className="min-h-screen">
-      {/* ── HEADER ── */}
+      {/* HEADER */}
       <header className="card sticky top-0 z-50 rounded-none border-x-0 border-t-0 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg font-bold text-white"
@@ -249,40 +272,70 @@ export default function Dashboard() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 space-y-4">
 
-        {/* ── PROCESSO SELECTOR ── */}
-        <div className="card p-3 flex flex-wrap gap-2 items-center">
-          <span className="text-xs font-bold text-slate-400 uppercase mr-1">Processo:</span>
-          {PROCESSO_LIST.map((p) => (
-            <button key={p} onClick={() => { setProcesso(p); setTab("Consolidado"); setFiltroMes("Todos"); setFiltroCaixa("Todas"); setFiltroAnalista("Todos"); }}
-              className={`px-4 py-1.5 rounded-full text-sm font-semibold border transition-all ${processo === p ? "text-white border-transparent" : "text-slate-400 border-navy-600 hover:border-slate-500"}`}
-              style={processo === p ? { background: "linear-gradient(135deg,#1B2A4A,#00A4E0)" } : {}}>
-              {p}
-            </button>
-          ))}
+        {/* PROCESSO SELECTOR */}
+        <div className="card p-4 space-y-4">
+          <div className="flex flex-wrap gap-2 items-center">
+            <span className="text-xs font-bold text-slate-400 uppercase mr-1">Processo:</span>
+            {(["Agenda Financeira", "Suporte Conciliação"] as const).map((p) => (
+              <button key={p} onClick={() => { setProcesso(p); setTab("Consolidado"); setFiltroMes("Todos"); setFiltroAnalista("Todos"); if (p === "Suporte Conciliação") setCaixasSel(new Set(SUPORTE_CAIXAS)); else setCaixasSel(new Set(AGENDA_FINANCEIRA_CAIXAS)); }}
+                className={`px-5 py-2 rounded-full text-sm font-semibold border transition-all ${processo === p ? "text-white border-transparent" : "text-slate-400 border-navy-600 hover:border-slate-500"}`}
+                style={processo === p ? { background: "linear-gradient(135deg,#1B2A4A,#00A4E0)" } : {}}>
+                {p}
+              </button>
+            ))}
+          </div>
+
+          {/* CAIXAS CHECKBOXES – só Agenda Financeira */}
+          {processo === "Agenda Financeira" && (
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <span className="text-xs font-bold text-slate-400 uppercase">Caixas:</span>
+                <button onClick={toggleTodas} className="text-xs text-brand-blue hover:text-white underline transition-colors">
+                  {caixasSel.size === caixasProcesso.length ? "Desmarcar todas" : "Marcar todas"}
+                </button>
+                <span className="text-xs text-slate-500">{caixasSel.size} de {caixasProcesso.length} selecionadas</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {AGENDA_FINANCEIRA_CAIXAS.map((cx) => {
+                  const ativo = caixasSel.has(cx);
+                  return (
+                    <button key={cx} onClick={() => toggleCaixa(cx)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${ativo ? "text-white border-transparent" : "text-slate-400 border-navy-600 hover:border-slate-500"}`}
+                      style={ativo ? { background: "#1B2A4A", borderColor: "#00A4E0" } : {}}>
+                      <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 ${ativo ? "border-blue-400" : "border-slate-600"}`}
+                        style={ativo ? { background: "#00A4E0" } : {}}>
+                        {ativo && <span className="text-white text-[9px] font-bold leading-none">✓</span>}
+                      </span>
+                      {abrevCaixa(cx)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* ── FILTROS ── */}
+        {/* FILTROS */}
         <div className="card p-3 flex flex-wrap gap-3 items-center">
           <span className="text-xs font-semibold text-slate-400 uppercase">Filtros:</span>
-          {[
-            { label: "Mês", val: filtroMes, set: setFiltroMes, opts: ["Todos", ...meses] },
-            { label: "Caixa", val: filtroCaixa, set: setFiltroCaixa, opts: ["Todas", ...caixasProc] },
-            { label: "Analista", val: filtroAnalista, set: setFiltroAnalista, opts: ["Todos", ...analistasProc] },
-          ].map(({ label, val, set, opts }) => (
-            <select key={label} value={val} onChange={(e) => set(e.target.value)}
-              className="text-sm rounded-lg px-3 py-1.5 text-slate-300 outline-none"
-              style={{ background: "#1a1f2e", border: "1.5px solid #3a4256" }}>
-              {opts.map((o) => <option key={o}>{o}</option>)}
-            </select>
-          ))}
-          {(filtroMes !== "Todos" || filtroCaixa !== "Todas" || filtroAnalista !== "Todos") && (
-            <button onClick={() => { setFiltroMes("Todos"); setFiltroCaixa("Todas"); setFiltroAnalista("Todos"); }}
+          <select value={filtroMes} onChange={(e) => setFiltroMes(e.target.value)}
+            className="text-sm rounded-lg px-3 py-1.5 text-slate-300 outline-none"
+            style={{ background: "#1a1f2e", border: "1.5px solid #3a4256" }}>
+            {["Todos", ...meses].map((o) => <option key={o}>{o}</option>)}
+          </select>
+          <select value={filtroAnalista} onChange={(e) => setFiltroAnalista(e.target.value)}
+            className="text-sm rounded-lg px-3 py-1.5 text-slate-300 outline-none"
+            style={{ background: "#1a1f2e", border: "1.5px solid #3a4256" }}>
+            {["Todos", ...analistasProc].map((o) => <option key={o}>{o}</option>)}
+          </select>
+          {(filtroMes !== "Todos" || filtroAnalista !== "Todos") && (
+            <button onClick={() => { setFiltroMes("Todos"); setFiltroAnalista("Todos"); }}
               className="text-xs text-slate-400 hover:text-red-400">✕ Limpar</button>
           )}
           <span className="ml-auto text-xs text-slate-500">{filtered.length} avaliações</span>
         </div>
 
-        {/* ── KPIs GLOBAIS ── */}
+        {/* KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           <KpiCard label="Total" val={String(kpis.total)} sub="avaliações" />
           <KpiCard label="Média Geral" val={fmt(kpis.media)} color={mediaColor(kpis.media)} />
@@ -292,19 +345,18 @@ export default function Dashboard() {
           <KpiCard label="NCG" val={pct(kpis.pctNCG)} sub={`${kpis.ncgs} registros`} color="#EF4444" />
         </div>
 
-        {/* ── TABS ── */}
+        {/* TABS */}
         <div className="card overflow-hidden">
           <TabBar tabs={TABS} active={tab} onChange={setTab} />
           <div className="p-5">
 
-            {/* ════════════════ CONSOLIDADO ════════════════ */}
+            {/* CONSOLIDADO */}
             {tab === "Consolidado" && (
               <div className="space-y-6">
                 <h2 className="text-base font-bold text-slate-200">
                   Médias de Qualidade | Consolidado {periodoLabel} – {processo}
                 </h2>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Qualidade Trimestral */}
                   <div>
                     <h3 className="text-sm font-bold text-slate-300 mb-3">Qualidade Trimestral</h3>
                     <ChartVolNota data={trimData} />
@@ -313,7 +365,6 @@ export default function Dashboard() {
                       <span className="flex items-center gap-1"><span className="inline-block border-t-2 border-dashed border-white w-6" />Nota</span>
                     </div>
                   </div>
-                  {/* Qualidade Trimestral por Célula */}
                   <div>
                     <h3 className="text-sm font-bold text-slate-300 mb-3">Qualidade Trimestral por Célula</h3>
                     <ChartMeses data={celData} meses={mesesRecentes} labelKey="caixa" />
@@ -326,8 +377,6 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </div>
-
-                {/* Volume e Média por Ciclo */}
                 <div>
                   <h3 className="text-sm font-bold text-slate-300 mb-3">Volume e Média por Ciclo</h3>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -343,38 +392,30 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* ════════════════ ACOMPANHAMENTO ════════════════ */}
+            {/* ACOMPANHAMENTO */}
             {tab === "Acompanhamento" && (
               <div className="space-y-6">
                 <h2 className="text-base font-bold text-slate-200">
-                  Acompanhamento Monitorias por Analista | {processo} | {filtroMes !== "Todos" ? filtroMes : meses[meses.length - 1] || "–"}
+                  Acompanhamento Monitorias | {processo} | {filtroMes !== "Todos" ? filtroMes : meses[meses.length - 1] || "–"}
                 </h2>
-
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                  {/* Quadro de Acompanhamento */}
                   <div>
-                    <h3 className="text-sm font-bold text-slate-300 mb-3">Quadro Acompanhamento</h3>
+                    <h3 className="text-sm font-bold text-slate-300 mb-3">Quadro de Acompanhamento</h3>
                     <table className="w-full text-sm border border-navy-600 rounded-xl overflow-hidden">
                       <thead>
                         <tr style={{ background: "#1B2A4A" }}>
                           <th className="py-2 px-3 text-left text-xs text-slate-300 font-bold">Status</th>
-                          {[1, 2, 3, 4].map((c) => (
-                            <th key={c} className="py-2 px-3 text-center text-xs text-slate-300 font-bold">{c}° Ciclo</th>
-                          ))}
+                          {[1,2,3,4].map((c) => <th key={c} className="py-2 px-3 text-center text-xs text-slate-300 font-bold">{c}° Ciclo</th>)}
                         </tr>
                       </thead>
                       <tbody>
                         <tr className="border-t border-navy-600">
                           <td className="py-2 px-3 text-slate-300">Ativos</td>
-                          {quadroCiclo.map((q) => (
-                            <td key={q.ciclo} className="py-2 px-3 text-center text-slate-200 font-semibold">{q.ativos}</td>
-                          ))}
+                          {quadroCiclo.map((q) => <td key={q.ciclo} className="py-2 px-3 text-center text-slate-200 font-semibold">{q.ativos}</td>)}
                         </tr>
                       </tbody>
                     </table>
                   </div>
-
-                  {/* Média por Ciclo */}
                   <div>
                     <h3 className="text-sm font-bold text-slate-300 mb-3">Média por Ciclo</h3>
                     <table className="w-full text-sm border border-navy-600 rounded-xl overflow-hidden">
@@ -399,21 +440,17 @@ export default function Dashboard() {
                     </table>
                   </div>
                 </div>
-
-                {/* Consolidado – Caixas Avaliadas */}
                 <div>
-                  <h3 className="text-sm font-bold text-slate-300 mb-3">Consolidado – Caixas avaliadas</h3>
+                  <h3 className="text-sm font-bold text-slate-300 mb-3">Consolidado – Caixas Avaliadas</h3>
                   <ChartVolNota data={caixasAval} />
                 </div>
-
-                {/* Tabela Analistas */}
                 <div>
                   <h3 className="text-sm font-bold text-slate-300 mb-3">Analistas</h3>
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
                       <thead>
                         <tr style={{ background: "#1B2A4A" }}>
-                          {["Analista", "Caixa(s)", "Volume", "Média", "NC", "NCG", "Status"].map((h) => (
+                          {["Analista","Caixa(s)","Volume","Média","NC","NCG","Status"].map((h) => (
                             <th key={h} className="py-2 px-3 text-left text-slate-300 font-bold whitespace-nowrap">{h}</th>
                           ))}
                         </tr>
@@ -423,7 +460,7 @@ export default function Dashboard() {
                           const { label, cls } = statusBadge(a.media);
                           return (
                             <tr key={a.analista} className={`border-t border-navy-600 ${i % 2 === 0 ? "" : "bg-navy-700/20"}`}>
-                              <td className="py-1.5 px-3 text-slate-200 font-medium whitespace-nowrap">{a.analista.split(" ").slice(0, 2).join(" ")}</td>
+                              <td className="py-1.5 px-3 text-slate-200 font-medium whitespace-nowrap">{a.analista.split(" ").slice(0,2).join(" ")}</td>
                               <td className="py-1.5 px-3 text-slate-400 text-xs">{a.caixas.map(abrevCaixa).join(", ")}</td>
                               <td className="py-1.5 px-3 text-center text-slate-300">{a.volume}</td>
                               <td className="py-1.5 px-3 text-center font-bold" style={{ color: mediaColor(a.media) }}>{pct(a.media)}</td>
@@ -440,22 +477,16 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* ════════════════ INDICADORES ════════════════ */}
+            {/* INDICADORES */}
             {tab === "Indicadores" && (
               <div className="space-y-6">
-                <h2 className="text-base font-bold text-slate-200">
-                  Indicadores de Qualidade | Acompanhamento {periodoLabel} – {processo}
-                </h2>
-
-                {/* KPI Pills */}
+                <h2 className="text-base font-bold text-slate-200">Indicadores de Qualidade | {processo} | {periodoLabel}</h2>
                 <div className="grid grid-cols-3 gap-4">
                   <KpiPill label="Nota Máxima" val={pct(kpis.pctMeta)} vol={`${pct(kpis.pctMeta)} vol. (${kpis.nota100})`} color="#00D664" />
                   <KpiPill label="NC" val={pct(kpis.pctNC)} vol={`${pct(kpis.pctNC)} vol. (${kpis.ncs})`} color="#F59E0B" />
                   <KpiPill label="NCG" val={pct(kpis.pctNCG)} vol={`${pct(kpis.pctNCG)} vol. (${kpis.ncgs})`} color="#EF4444" />
                 </div>
-
-                {/* Apontamentos por Caixa */}
-                {caixasProc.map((cx) => {
+                {caixasAtivas.map((cx) => {
                   const cr = causaRaiz.filter((r) => r.caixa === cx);
                   if (!cr.length) return null;
                   return (
@@ -465,22 +496,20 @@ export default function Dashboard() {
                         {cr.map((r, i) => (
                           <div key={i} className="flex items-start gap-2 text-xs text-slate-300">
                             <span className="text-amber-400 font-bold mt-0.5">›</span>
-                            <span><b>{pct(r.peso)}</b> – {r.causaRaiz} ({r.peso < 100 ? "NC" : "OK"}) - 1 sinalização.</span>
+                            <span><b>{pct(r.peso)}</b> – {r.causaRaiz} ({r.peso < 100 ? "NC" : "OK"}) · 1 sinalização.</span>
                           </div>
                         ))}
                       </div>
                     </div>
                   );
                 })}
-
-                {/* Causa Raiz table */}
                 <div>
-                  <h3 className="text-sm font-bold text-slate-300 mb-3">Acompanhamento Analista | Causa Raiz</h3>
+                  <h3 className="text-sm font-bold text-slate-300 mb-3">Causa Raiz – Analistas</h3>
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
                       <thead>
                         <tr style={{ background: "#1B2A4A" }}>
-                          {["Causa Raiz", "Analista", "Ciclo", "Assunto", "Peso", "Sinalização", "Média Analista", "Mês"].map((h) => (
+                          {["Causa Raiz","Analista","Ciclo","Assunto","Peso","Média Analista","Mês"].map((h) => (
                             <th key={h} className="py-2 px-2 text-left text-slate-300 font-bold whitespace-nowrap">{h}</th>
                           ))}
                         </tr>
@@ -489,17 +518,16 @@ export default function Dashboard() {
                         {causaRaiz.map((r, i) => (
                           <tr key={i} className={`border-t border-navy-600 ${i % 2 === 0 ? "" : "bg-navy-700/20"}`}>
                             <td className="py-1.5 px-2 text-slate-200 max-w-xs truncate">{r.causaRaiz}</td>
-                            <td className="py-1.5 px-2 text-slate-300 whitespace-nowrap">{r.analista.split(" ").slice(0, 3).join(" ")}</td>
+                            <td className="py-1.5 px-2 text-slate-300 whitespace-nowrap">{r.analista.split(" ").slice(0,3).join(" ")}</td>
                             <td className="py-1.5 px-2 text-center text-slate-400">{r.ciclo}°</td>
                             <td className="py-1.5 px-2 text-slate-400">{abrevCaixa(r.assunto)}</td>
                             <td className="py-1.5 px-2 text-center font-bold" style={{ color: mediaColor(r.peso) }}>{r.peso}</td>
-                            <td className="py-1.5 px-2 text-center text-slate-400">1</td>
                             <td className="py-1.5 px-2 text-center font-bold" style={{ color: mediaColor(r.mediaAnalista) }}>{pct(r.mediaAnalista)}</td>
                             <td className="py-1.5 px-2 text-slate-500">{r.mes}</td>
                           </tr>
                         ))}
                         {causaRaiz.length === 0 && (
-                          <tr><td colSpan={8} className="py-6 text-center text-slate-500">Nenhum apontamento no período</td></tr>
+                          <tr><td colSpan={7} className="py-6 text-center text-slate-500">Nenhum apontamento no período</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -508,14 +536,10 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* ════════════════ OFENSORES ════════════════ */}
+            {/* OFENSORES */}
             {tab === "Ofensores" && (
               <div className="space-y-6">
-                <h2 className="text-base font-bold text-slate-200">
-                  Médias de Qualidade | Consolidado últimos 3 meses – {processo}
-                </h2>
-
-                {/* Assunto Ofensor – barras agrupadas por mês */}
+                <h2 className="text-base font-bold text-slate-200">Médias de Qualidade | Últimos 3 meses – {processo}</h2>
                 <div>
                   <h3 className="text-sm font-bold text-slate-300 mb-3">Assunto Ofensor</h3>
                   <ChartMeses data={ofensorData} meses={mesesRecentes} labelKey="label" />
@@ -527,19 +551,13 @@ export default function Dashboard() {
                     ))}
                   </div>
                 </div>
-
-                {/* Ofensores por caixa (analistas abaixo) */}
-                {caixasProc.map((cx) => {
+                {caixasAtivas.map((cx) => {
                   const cr = causaRaiz.filter((r) => r.caixa === cx);
                   if (!cr.length) return null;
                   const uniqAn = [...new Set(cr.map((r) => r.analista))];
                   const anData = uniqAn.map((an) => {
                     const reg = cr.filter((r) => r.analista === an);
-                    return {
-                      nome: an.split(" ").slice(0, 2).join(" "),
-                      qty: reg.length,
-                      media: reg.reduce((s, r) => s + r.mediaAnalista, 0) / reg.length,
-                    };
+                    return { nome: an.split(" ").slice(0,2).join(" "), qty: reg.length, media: reg.reduce((s, r) => s + r.mediaAnalista, 0) / reg.length };
                   });
                   return (
                     <div key={cx}>
@@ -549,9 +567,9 @@ export default function Dashboard() {
                           <CartesianGrid strokeDasharray="3 3" stroke="#2d3548" />
                           <XAxis dataKey="nome" tick={{ fill: "#94a3b8", fontSize: 9 }} angle={-20} textAnchor="end" />
                           <YAxis yAxisId="q" orientation="left" tick={{ fill: "#94a3b8", fontSize: 10 }} />
-                          <YAxis yAxisId="m" orientation="right" domain={[0, 100]} tick={{ fill: "#94a3b8", fontSize: 10 }} />
+                          <YAxis yAxisId="m" orientation="right" domain={[0,100]} tick={{ fill: "#94a3b8", fontSize: 10 }} />
                           <Tooltip contentStyle={{ background: "#1a2030", border: "1px solid #3a4256", borderRadius: 8 }} />
-                          <Bar yAxisId="q" dataKey="qty" fill="#1B2A4A" radius={[3, 3, 0, 0]} name="Qtd">
+                          <Bar yAxisId="q" dataKey="qty" fill="#1B2A4A" radius={[3,3,0,0]} name="Qtd">
                             <LabelList dataKey="qty" position="top" style={{ fill: "#e2e8f0", fontSize: 10, fontWeight: 700 }} />
                           </Bar>
                           <Line yAxisId="m" type="monotone" dataKey="media" stroke="#00A4E0" strokeWidth={2}
@@ -567,15 +585,13 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* ════════════════ ANALISTAS 100% ════════════════ */}
+            {/* ANALISTAS 100% */}
             {tab === "Analistas 100%" && (
               <div className="space-y-6">
                 <h2 className="text-base font-bold text-slate-200">
-                  Acompanhamento Monitorias por Analista | 100% | {filtroMes !== "Todos" ? filtroMes : "Período"}
+                  Acompanhamento Monitorias | 100% | {filtroMes !== "Todos" ? filtroMes : "Período"}
                 </h2>
-
-                {/* 100% por caixa */}
-                {caixasProc.map((cx) => {
+                {caixasAtivas.map((cx) => {
                   const avCx = filtered.filter((a) => a.caixa === cx);
                   const anCx = byAnalista(avCx).filter((a) => a.media >= 100);
                   if (!anCx.length) return null;
@@ -583,13 +599,14 @@ export default function Dashboard() {
                     <div key={cx}>
                       <h3 className="text-xs font-bold text-slate-400 uppercase mb-2">Média Monitoria | Analistas – {abrevCaixa(cx)}</h3>
                       <ResponsiveContainer width="100%" height={160}>
-                        <BarChart data={anCx.map((a) => ({ nome: a.analista.split(" ").slice(0, 2).join(" "), pct: a.media }))}
+                        <BarChart data={anCx.map((a) => ({ nome: a.analista.split(" ").slice(0,2).join(" "), pct: a.media }))}
                           margin={{ top: 20, right: 5, left: -15, bottom: 30 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#2d3548" />
                           <XAxis dataKey="nome" tick={{ fill: "#94a3b8", fontSize: 9 }} angle={-20} textAnchor="end" interval={0} />
-                          <YAxis domain={[0, 100]} tick={{ fill: "#94a3b8", fontSize: 10 }} />
-                          <Tooltip contentStyle={{ background: "#1a2030", border: "1px solid #3a4256", borderRadius: 8 }} formatter={(v: any) => [pct(v), "Média"]} />
-                          <Bar dataKey="pct" fill="#00A4E0" radius={[4, 4, 0, 0]}>
+                          <YAxis domain={[0,100]} tick={{ fill: "#94a3b8", fontSize: 10 }} />
+                          <Tooltip contentStyle={{ background: "#1a2030", border: "1px solid #3a4256", borderRadius: 8 }}
+                            formatter={(v: any) => [pct(v), "Média"]} />
+                          <Bar dataKey="pct" fill="#00A4E0" radius={[4,4,0,0]}>
                             <LabelList dataKey="pct" position="top" style={{ fill: "#00D664", fontSize: 11, fontWeight: 700 }}
                               formatter={(v: number) => pct(v)} />
                           </Bar>
@@ -598,19 +615,14 @@ export default function Dashboard() {
                     </div>
                   );
                 })}
-
-                {an100.length === 0 && (
-                  <div className="text-center py-10 text-slate-500">Nenhum analista com 100% no filtro selecionado</div>
-                )}
-
-                {/* Abaixo da meta */}
+                {an100.length === 0 && <div className="text-center py-10 text-slate-500">Nenhum analista com 100% no filtro selecionado</div>}
                 {anAbaixo.length > 0 && (
                   <div className="card p-4">
                     <h3 className="text-sm font-bold text-amber-400 mb-3">⚠ Analistas Abaixo da Meta</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {anAbaixo.map((a) => (
                         <div key={a.analista} className="rounded-xl p-3 border border-amber-500/30 bg-amber-500/5">
-                          <p className="text-xs font-bold text-slate-300 mb-1">{a.analista.split(" ").slice(0, 2).join(" ")}</p>
+                          <p className="text-xs font-bold text-slate-300 mb-1">{a.analista.split(" ").slice(0,2).join(" ")}</p>
                           <p className="text-xl font-extrabold" style={{ color: mediaColor(a.media) }}>{pct(a.media)}</p>
                           <p className="text-xs text-slate-500">{a.volume} avaliações · {a.caixas.map(abrevCaixa).join(", ")}</p>
                         </div>
@@ -620,13 +632,10 @@ export default function Dashboard() {
                 )}
               </div>
             )}
-
           </div>
         </div>
 
-        <p className="text-center text-xs text-slate-600 pb-4">
-          Dashboard de Qualidade · Monitorias Cielo · Dados em tempo real via Firebase
-        </p>
+        <p className="text-center text-xs text-slate-600 pb-4">Dashboard de Qualidade · Monitorias Cielo · Dados em tempo real via Firebase</p>
       </div>
     </div>
   );
